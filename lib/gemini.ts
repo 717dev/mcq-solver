@@ -59,11 +59,14 @@ export async function solveMCQWithGemini(
   // Clean API key (remove quotes, whitespace)
   const apiKey = rawApiKey.trim().replace(/^["']|["']$/g, '');
 
-  // Models to try in order
-  const userModel = process.env.GEMINI_MODEL ? process.env.GEMINI_MODEL.trim() : null;
-  const modelsToTry = userModel
-    ? [userModel, 'gemini-1.5-flash', 'gemini-1.5-flash-latest', 'gemini-2.0-flash-exp']
-    : ['gemini-1.5-flash', 'gemini-1.5-flash-latest', 'gemini-2.0-flash-exp'];
+  // Officially supported stable Gemini models in v1beta API
+  const modelsToTry = ['gemini-1.5-flash', 'gemini-1.5-pro'];
+
+  // If user explicitly configured GEMINI_MODEL in env, try that first if it's valid
+  const customModel = process.env.GEMINI_MODEL?.trim();
+  if (customModel && !modelsToTry.includes(customModel) && !customModel.includes('2.0-flash-exp')) {
+    modelsToTry.unshift(customModel);
+  }
 
   let lastGoogleErrorMessage = '';
 
@@ -104,9 +107,9 @@ export async function solveMCQWithGemini(
         const errorMsg = errorJson?.error?.message || (await response.text().catch(() => ''));
         lastGoogleErrorMessage = `[Google API ${response.status}] ${errorMsg || response.statusText}`;
 
-        console.error(`[Gemini API Model Error - ${modelName}] HTTP ${response.status}:`, errorMsg);
+        console.error(`[Gemini API Error - ${modelName}] HTTP ${response.status}:`, errorMsg);
 
-        // If key itself is invalid (API_KEY_INVALID), trying other models won't help
+        // If key itself is invalid (API_KEY_INVALID), stop retrying
         if (errorMsg.includes('API_KEY_INVALID') || errorMsg.includes('API key not valid')) {
           return {
             success: false,
@@ -114,7 +117,7 @@ export async function solveMCQWithGemini(
           };
         }
 
-        // Try next model if 404 model not found
+        // Try next official model
         continue;
       }
 
