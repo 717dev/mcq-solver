@@ -1,3 +1,4 @@
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { MCQAnswer } from './types';
 
 const SYSTEM_PROMPT = `
@@ -10,37 +11,25 @@ Your task:
 4. Provide a concise, clear explanation (2-3 sentences max).
 5. Rate your confidence level strictly as "high", "medium", or "low".
 
-Rules:
-- If the image does not contain a readable MCQ question or options are missing/blurry/illegible, respond with:
-  {"success": false, "error": "The question or options are not clear enough to determine the answer."}
-- If multiple MCQs appear in the image, process only the main/first visible question.
-- Always output valid JSON strictly matching the specified JSON schema.
-`.trim();
-
-const JSON_SCHEMA = {
-  type: "OBJECT",
-  properties: {
-    success: { type: "BOOLEAN" },
-    error: { type: "STRING", description: "Reason why question could not be solved if success is false" },
-    question: { type: "STRING", description: "The full question text extracted from the image" },
-    options: {
-      type: "OBJECT",
-      description: "Key-value pairs of option letters to option text, e.g. A, B, C, D",
-      properties: {
-        A: { type: "STRING" },
-        B: { type: "STRING" },
-        C: { type: "STRING" },
-        D: { type: "STRING" },
-        E: { type: "STRING" }
-      }
-    },
-    answer: { type: "STRING", description: "The letter of the correct option, e.g., 'A', 'B', 'C', or 'D'" },
-    answerText: { type: "STRING", description: "The exact text of the correct option" },
-    explanation: { type: "STRING", description: "Short explanation for why this answer is correct" },
-    confidence: { type: "STRING", description: "high, medium, or low" }
+Output MUST be a single valid JSON object strictly matching this format:
+{
+  "success": true,
+  "question": "string",
+  "options": {
+    "A": "string",
+    "B": "string",
+    "C": "string",
+    "D": "string"
   },
-  required: ["success"]
-};
+  "answer": "A",
+  "answerText": "string",
+  "explanation": "string",
+  "confidence": "high"
+}
+
+If the image is blurry, illegible, or not an MCQ, respond with:
+{"success": false, "error": "The question or options are not clear enough to determine the answer."}
+`.trim();
 
 export async function solveMCQWithGemini(
   base64Image: string,
@@ -58,69 +47,37 @@ export async function solveMCQWithGemini(
 
   // Clean API key (remove quotes, whitespace)
   const apiKey = rawApiKey.trim().replace(/^["']|["']$/g, '');
-
-  // Official Gemini 1.5 Flash endpoint
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
-
-  const requestBody = {
-    contents: [
-      {
-        parts: [
-          { text: SYSTEM_PROMPT },
-          {
-            inline_data: {
-              mime_type: mimeType,
-              data: base64Image,
-            },
-          },
-        ],
-      },
-    ],
-    generationConfig: {
-      temperature: 0.1,
-      maxOutputTokens: 1000,
-      response_mime_type: "application/json",
-      response_schema: JSON_SCHEMA,
-    },
-  };
+  const modelName = process.env.GEMINI_MODEL?.trim() || 'gemini-1.5-flash';
 
   try {
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody),
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({
+      model: modelName,
+      generationConfig: {
+        temperature: 0.1,
+        responseMimeType: 'application/json',
+      },
     });
 
-    if (!response.ok) {
-      const errorJson = await response.json().catch(() => null);
-      const errorMsg = errorJson?.error?.message || (await response.text().catch(() => ''));
-      console.error(`[Gemini API Error] HTTP ${response.status}:`, errorMsg);
+    const result = await model.generateContent([
+      SYSTEM_PROMPT,
+      {
+        inlineData: {
+          data: base64Image,
+          mimeType: mimeType,
+        },
+      },
+    ]);
 
-      if (response.status === 400 || response.status === 403 || errorMsg.includes('API_KEY_INVALID')) {
-        return {
-          success: false,
-          error: `Google API Error (${response.status}): ${errorMsg || 'Invalid API Key'}. Please check your GEMINI_API_KEY in Vercel Environment Variables.`,
-        };
-      }
-
-      return {
-        success: false,
-        error: `[Google API ${response.status}] ${errorMsg || response.statusText}`,
-      };
-    }
-
-    const responseData = await response.json();
-    const candidateText = responseData?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!candidateText) {
+    const responseText = result.response.text();
+    if (!responseText) {
       return {
         success: false,
         error: 'Received empty response from AI engine. Please capture a clearer picture.',
       };
     }
 
-    // Clean JSON markdown wrapper if present
-    const cleanedText = candidateText.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
+    const cleanedText = responseText.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
     const parsed = JSON.parse(cleanedText);
 
     if (parsed.success === false || parsed.error) {
@@ -152,11 +109,20 @@ export async function solveMCQWithGemini(
         confidence,
       },
     };
-  } catch (err: unknown) {
-    console.error(`[Gemini Exception]`, err);
+  } catch (err: any) {
+    console.error('[Gemini SDK Exception]', err);
+    const errorMsg = err?.message || String(err);
+
+    if (errorMsg.includes('API_KEY_INVALID') || errorMsg.includes('API key not valid')) {
+      return {
+        success: false,
+        error: 'Google API Key Error: API_KEY_INVALID. Please create a new free key at https://aistudio.google.com and update Vercel.',
+      };
+    }
+
     return {
       success: false,
-      error: err instanceof Error ? err.message : 'Network error connecting to Gemini API.',
+      error: `Gemini SDK Error: ${errorMsg}`,
     };
   }
 }
