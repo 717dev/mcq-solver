@@ -44,10 +44,10 @@ export async function solveMCQWithGemini(
   const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
   if (!apiKey || apiKey.trim() === '') {
-    console.error('[Gemini Integration Error] GEMINI_API_KEY is not configured in server environment.');
+    console.error('[Gemini Integration Error] GEMINI_API_KEY is not configured.');
     return {
       success: false,
-      error: 'AI solving engine is currently unconfigured. Please check backend server setup.',
+      error: 'Gemini API Key is missing. Please add your GEMINI_API_KEY to .env.local (or Vercel Environment Variables).',
     };
   }
 
@@ -89,9 +89,17 @@ export async function solveMCQWithGemini(
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`[Gemini API Error] HTTP ${response.status}: ${errorText}`);
+
+      if (response.status === 400 || response.status === 403) {
+        return {
+          success: false,
+          error: 'Invalid Gemini API key or unauthorized request. Please check your API key.',
+        };
+      }
+
       return {
         success: false,
-        error: 'Unable to solve this question right now. Please try again later.',
+        error: 'Gemini AI service error. Please try again in a few moments.',
       };
     }
 
@@ -142,7 +150,7 @@ export async function solveMCQWithGemini(
     console.error('[Gemini Service Exception]', err);
     return {
       success: false,
-      error: 'Unable to solve this question right now. Please try again later.',
+      error: 'Unable to connect to AI engine. Please check your internet connection and try again.',
     };
   }
 }

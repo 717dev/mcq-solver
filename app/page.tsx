@@ -16,25 +16,8 @@ export default function HomePage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [cooldownSeconds, setCooldownSeconds] = useState<number>(0);
 
-  // Handle captured or uploaded photo from CameraView
-  const handleCapture = (imageDataUrl: string) => {
-    setCapturedImage(imageDataUrl);
-    setErrorMessage(null);
-    setAppState('preview');
-  };
-
-  // Handle retake action
-  const handleRetake = () => {
-    setCapturedImage(null);
-    setSolution(null);
-    setErrorMessage(null);
-    setAppState('camera');
-  };
-
-  // Handle solve submit to /api/solve backend
-  const handleSolve = async () => {
-    if (!capturedImage) return;
-
+  // Send solve request to /api/solve
+  const sendSolveRequest = async (imageDataUrl: string) => {
     setAppState('solving');
     setErrorMessage(null);
 
@@ -44,7 +27,7 @@ export default function HomePage() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ image: capturedImage }),
+        body: JSON.stringify({ image: imageDataUrl }),
       });
 
       const data: SolveApiResponse = await response.json();
@@ -53,7 +36,7 @@ export default function HomePage() {
         const errorText =
           data.success === false
             ? data.error
-            : 'Unable to solve this question right now. Please try again later.';
+            : 'Unable to solve this question right now. Please check your Gemini API key and try again.';
 
         if (data.success === false && data.retryAfter) {
           setCooldownSeconds(data.retryAfter);
@@ -83,6 +66,26 @@ export default function HomePage() {
     }
   };
 
+  // Handle captured or uploaded photo from CameraView
+  const handleCapture = (imageDataUrl: string, autoSolve = true) => {
+    setCapturedImage(imageDataUrl);
+    setErrorMessage(null);
+
+    if (autoSolve) {
+      sendSolveRequest(imageDataUrl);
+    } else {
+      setAppState('preview');
+    }
+  };
+
+  // Handle retake / try again action
+  const handleRetake = () => {
+    setCapturedImage(null);
+    setSolution(null);
+    setErrorMessage(null);
+    setAppState('camera');
+  };
+
   return (
     <main className="flex-1 flex flex-col items-center justify-between p-4 sm:p-6 max-w-md mx-auto w-full">
       {/* Header */}
@@ -92,10 +95,10 @@ export default function HomePage() {
           <span>AI MCQ SOLVER</span>
         </div>
         <h1 className="text-xl font-bold text-slate-100 tracking-tight">
-          Camera Question Solver
+          Auto Camera MCQ Solver
         </h1>
         <p className="text-xs text-slate-400">
-          Capture any multiple choice question for instant answer & explanation
+          Position your MCQ inside frame • Auto-captures & solves in 25 seconds
         </p>
       </header>
 
@@ -116,7 +119,9 @@ export default function HomePage() {
             onCapture={handleCapture}
             onError={(msg) => {
               setErrorMessage(msg);
+              setAppState('error');
             }}
+            autoCaptureSeconds={25}
           />
         )}
 
@@ -124,11 +129,11 @@ export default function HomePage() {
           <ImagePreview
             imageSrc={capturedImage}
             onRetake={handleRetake}
-            onSolve={handleSolve}
+            onSolve={() => sendSolveRequest(capturedImage)}
           />
         )}
 
-        {appState === 'solving' && <LoadingState message="Analyzing question..." />}
+        {appState === 'solving' && <LoadingState message="Analyzing & solving question..." />}
 
         {appState === 'result' && solution && (
           <AnswerCard result={solution} onSolveAnother={handleRetake} />
@@ -139,9 +144,9 @@ export default function HomePage() {
             <div className="w-12 h-12 rounded-full bg-rose-950/80 border border-rose-800 text-rose-400 flex items-center justify-center mx-auto">
               <AlertCircle className="w-6 h-6" />
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1.5">
               <h3 className="text-base font-semibold text-slate-100">Unable to solve</h3>
-              <p className="text-xs text-rose-300/90 leading-relaxed">
+              <p className="text-xs text-rose-300/90 leading-relaxed font-medium bg-rose-950/50 p-3 rounded-xl border border-rose-900/50">
                 {errorMessage || 'An unexpected error occurred.'}
               </p>
             </div>
@@ -160,9 +165,9 @@ export default function HomePage() {
       {/* Footer Info */}
       <footer className="w-full text-center py-3 border-t border-slate-800/80 text-[11px] text-slate-400 space-y-1">
         <div className="flex items-center justify-center space-x-2">
-          <span>Unlimited practice</span>
+          <span>Auto-capture 25s</span>
           <span>•</span>
-          <span>30s cooldown</span>
+          <span>Unlimited practice</span>
         </div>
         <p className="text-[10px] text-slate-400">
           Powered by Gemini Vision API • Answers are AI generated recommendations

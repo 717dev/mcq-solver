@@ -1,15 +1,20 @@
 'use client';
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { Camera, RefreshCw, Upload, AlertCircle } from 'lucide-react';
+import { Camera, RefreshCw, Upload, AlertCircle, Play, Pause, Zap } from 'lucide-react';
 import { compressImage, readFileAsDataUrl } from '@/lib/imageUtils';
 
 interface CameraViewProps {
-  onCapture: (compressedDataUrl: string) => void;
+  onCapture: (compressedDataUrl: string, autoSolve?: boolean) => void;
   onError: (errorMessage: string) => void;
+  autoCaptureSeconds?: number;
 }
 
-export const CameraView: React.FC<CameraViewProps> = ({ onCapture, onError }) => {
+export const CameraView: React.FC<CameraViewProps> = ({
+  onCapture,
+  onError,
+  autoCaptureSeconds = 25,
+}) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -18,12 +23,15 @@ export const CameraView: React.FC<CameraViewProps> = ({ onCapture, onError }) =>
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState<boolean>(true);
 
+  // Auto-capture timer state (25 seconds)
+  const [timeLeft, setTimeLeft] = useState<number>(autoCaptureSeconds);
+  const [isTimerPaused, setIsTimerPaused] = useState<boolean>(false);
+
   // Initialize camera stream
   const startCamera = useCallback(async (mode: 'environment' | 'user') => {
     setIsInitializing(true);
     setCameraError(null);
 
-    // Stop existing stream tracks
     if (stream) {
       stream.getTracks().forEach((track) => track.stop());
     }
@@ -69,8 +77,8 @@ export const CameraView: React.FC<CameraViewProps> = ({ onCapture, onError }) =>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [facingMode]);
 
-  // Capture photo from canvas
-  const handleCapture = async () => {
+  // Capture photo logic
+  const performCapture = useCallback(async (autoSolve = true) => {
     if (!videoRef.current) return;
 
     try {
@@ -87,21 +95,38 @@ export const CameraView: React.FC<CameraViewProps> = ({ onCapture, onError }) =>
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const rawDataUrl = canvas.toDataURL('image/jpeg', 0.9);
 
-      // Compress client-side for fast network payload
+      // Compress image client-side
       const compressed = await compressImage(rawDataUrl);
-      onCapture(compressed);
+      onCapture(compressed, autoSolve);
     } catch (err: unknown) {
       console.error('Capture error:', err);
       onError('Failed to capture photo. Please try uploading an image instead.');
     }
-  };
+  }, [onCapture, onError]);
 
-  // Toggle front/rear camera
+  // 25-Second Auto-Capture Countdown Effect
+  useEffect(() => {
+    if (isInitializing || cameraError || isTimerPaused) return;
+
+    if (timeLeft <= 0) {
+      performCapture(true);
+      return;
+    }
+
+    const timer = setInterval(() => {
+      setTimeLeft((prev) => prev - 1);
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [timeLeft, isInitializing, cameraError, isTimerPaused, performCapture]);
+
+  // Reset timer on camera switch
   const toggleCamera = () => {
+    setTimeLeft(autoCaptureSeconds);
     setFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'));
   };
 
-  // File upload fallback
+  // Manual File Upload Handler
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -109,16 +134,18 @@ export const CameraView: React.FC<CameraViewProps> = ({ onCapture, onError }) =>
     try {
       const rawDataUrl = await readFileAsDataUrl(file);
       const compressed = await compressImage(rawDataUrl);
-      onCapture(compressed);
+      onCapture(compressed, true);
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to process selected file.';
       onError(errorMsg);
     }
   };
 
+  const progressPercentage = Math.max(0, Math.min(100, (timeLeft / autoCaptureSeconds) * 100));
+
   return (
     <div className="flex flex-col items-center w-full max-w-md mx-auto space-y-4">
-      {/* Video Viewport Container */}
+      {/* Live Video Frame Container */}
       <div className="relative w-full aspect-[4/3] bg-slate-950 rounded-2xl overflow-hidden shadow-xl border border-slate-800 flex items-center justify-center">
         {cameraError ? (
           <div className="p-6 text-center text-slate-300 space-y-3">
@@ -134,22 +161,48 @@ export const CameraView: React.FC<CameraViewProps> = ({ onCapture, onError }) =>
               className="w-full h-full object-cover"
             />
 
-            {/* Viewfinder overlay target */}
+            {/* Viewfinder Target & Auto-Capture Status Banner */}
             <div className="absolute inset-4 border-2 border-dashed border-white/40 rounded-xl pointer-events-none flex flex-col justify-between p-3">
-              <div className="text-[11px] font-semibold tracking-wider text-white/80 uppercase bg-black/40 backdrop-blur-md self-center px-3 py-1 rounded-full border border-white/10">
-                Position MCQ in frame
+              {/* Top Countdown Badge */}
+              <div className="self-center bg-slate-900/90 backdrop-blur-md px-4 py-1.5 rounded-full border border-blue-500/30 flex items-center space-x-2 text-white shadow-lg pointer-events-auto">
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${isTimerPaused ? 'bg-amber-400' : 'bg-blue-400'} opacity-75`}></span>
+                  <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${isTimerPaused ? 'bg-amber-500' : 'bg-blue-500'}`}></span>
+                </span>
+                <span className="text-xs font-semibold tracking-wide">
+                  {isTimerPaused ? (
+                    'Timer Paused'
+                  ) : (
+                    <>Auto-capturing in <span className="font-bold text-blue-300">{timeLeft}s</span></>
+                  )}
+                </span>
+              </div>
+
+              {/* Viewfinder helper note */}
+              <div className="text-[11px] text-center text-slate-300 bg-black/60 backdrop-blur-sm px-3 py-1 rounded-full self-center">
+                Align MCQ inside frame
               </div>
             </div>
 
-            {/* Switch Camera Button (Top Right) */}
+            {/* Top Right Camera Switch Button */}
             <button
               onClick={toggleCamera}
               type="button"
               aria-label="Switch Camera"
               className="absolute top-3 right-3 p-2.5 rounded-full bg-slate-900/80 hover:bg-slate-900 text-white backdrop-blur-md transition-colors border border-white/10 active:scale-95"
             >
-              <RefreshCw className="w-5 h-5" />
+              <RefreshCw className="w-4 h-4" />
             </button>
+
+            {/* Bottom Timer Progress Bar */}
+            {!isInitializing && (
+              <div className="absolute bottom-0 inset-x-0 h-1.5 bg-slate-800">
+                <div
+                  className="h-full bg-gradient-to-r from-blue-500 to-indigo-500 transition-all duration-1000 ease-linear"
+                  style={{ width: `${progressPercentage}%` }}
+                />
+              </div>
+            )}
           </>
         )}
 
@@ -160,31 +213,54 @@ export const CameraView: React.FC<CameraViewProps> = ({ onCapture, onError }) =>
         )}
       </div>
 
-      {/* Main Action Controls */}
-      <div className="w-full flex flex-col items-center space-y-3 pt-2">
-        {/* Shutter Capture Button */}
+      {/* Control Buttons */}
+      <div className="w-full flex flex-col items-center space-y-3 pt-1">
         {!cameraError && (
-          <button
-            onClick={handleCapture}
-            disabled={isInitializing}
-            type="button"
-            aria-label="Capture MCQ Photo"
-            className="w-full py-4 px-6 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 active:scale-[0.99] text-white font-semibold rounded-xl shadow-lg shadow-blue-500/25 flex items-center justify-center space-x-2 text-base transition-all disabled:opacity-50"
-          >
-            <Camera className="w-6 h-6" />
-            <span>📷 Capture MCQ</span>
-          </button>
+          <div className="w-full grid grid-cols-2 gap-3">
+            {/* Immediate Snap Now Button */}
+            <button
+              onClick={() => performCapture(true)}
+              disabled={isInitializing}
+              type="button"
+              aria-label="Snap Photo Now"
+              className="py-3.5 px-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 active:scale-[0.98] text-white font-semibold rounded-xl shadow-lg shadow-blue-500/25 flex items-center justify-center space-x-2 text-sm transition-all disabled:opacity-50"
+            >
+              <Zap className="w-4 h-4 text-blue-200" />
+              <span>Snap Now</span>
+            </button>
+
+            {/* Pause / Resume Timer Toggle Button */}
+            <button
+              onClick={() => setIsTimerPaused((prev) => !prev)}
+              disabled={isInitializing}
+              type="button"
+              aria-label={isTimerPaused ? 'Resume Timer' : 'Pause Timer'}
+              className="py-3.5 px-4 bg-slate-800 hover:bg-slate-700 active:scale-[0.98] text-slate-200 font-semibold rounded-xl border border-slate-700 flex items-center justify-center space-x-2 text-sm transition-all disabled:opacity-50"
+            >
+              {isTimerPaused ? (
+                <>
+                  <Play className="w-4 h-4 text-emerald-400" />
+                  <span>Resume (25s)</span>
+                </>
+              ) : (
+                <>
+                  <Pause className="w-4 h-4 text-amber-400" />
+                  <span>Pause Timer</span>
+                </>
+              )}
+            </button>
+          </div>
         )}
 
-        {/* Fallback Upload Button */}
+        {/* Upload File Fallback */}
         <button
           onClick={() => fileInputRef.current?.click()}
           type="button"
           aria-label="Upload Image File"
-          className="w-full py-3 px-6 bg-slate-800 hover:bg-slate-700 active:scale-[0.99] text-slate-200 font-medium rounded-xl border border-slate-700 flex items-center justify-center space-x-2 text-sm transition-all"
+          className="w-full py-3 px-6 bg-slate-900 hover:bg-slate-800 active:scale-[0.99] text-slate-300 font-medium rounded-xl border border-slate-800 flex items-center justify-center space-x-2 text-xs transition-all"
         >
-          <Upload className="w-4 h-4 text-slate-400" />
-          <span>Upload Image</span>
+          <Upload className="w-3.5 h-3.5 text-slate-400" />
+          <span>Upload Image File</span>
         </button>
 
         <input
