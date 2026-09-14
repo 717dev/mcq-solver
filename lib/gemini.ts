@@ -59,115 +59,104 @@ export async function solveMCQWithGemini(
   // Clean API key (remove quotes, whitespace)
   const apiKey = rawApiKey.trim().replace(/^["']|["']$/g, '');
 
-  // API endpoints to try (v1beta and v1 with different vision models)
-  const endpointsToTry = [
-    { url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent', name: 'gemini-1.5-flash (v1beta)' },
-    { url: 'https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent', name: 'gemini-1.5-flash (v1)' },
-    { url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent', name: 'gemini-1.5-pro (v1beta)' },
-    { url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent', name: 'gemini-2.0-flash-exp' },
-  ];
+  // Official Gemini 1.5 Flash endpoint
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
 
-  let lastError = '';
-
-  for (const item of endpointsToTry) {
-    const fullUrl = `${item.url}?key=${encodeURIComponent(apiKey)}`;
-
-    const requestBody = {
-      contents: [
-        {
-          parts: [
-            { text: SYSTEM_PROMPT },
-            {
-              inline_data: {
-                mime_type: mimeType,
-                data: base64Image,
-              },
+  const requestBody = {
+    contents: [
+      {
+        parts: [
+          { text: SYSTEM_PROMPT },
+          {
+            inline_data: {
+              mime_type: mimeType,
+              data: base64Image,
             },
-          ],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.1,
-        maxOutputTokens: 1000,
-        response_mime_type: "application/json",
-        response_schema: JSON_SCHEMA,
+          },
+        ],
       },
-    };
+    ],
+    generationConfig: {
+      temperature: 0.1,
+      maxOutputTokens: 1000,
+      response_mime_type: "application/json",
+      response_schema: JSON_SCHEMA,
+    },
+  };
 
-    try {
-      const response = await fetch(fullUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-      });
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
 
-      if (!response.ok) {
-        const errorJson = await response.json().catch(() => null);
-        const errorMsg = errorJson?.error?.message || (await response.text().catch(() => ''));
-        lastError = errorMsg || response.statusText;
-        console.error(`[Gemini API Error - ${item.name}] HTTP ${response.status}:`, lastError);
+    if (!response.ok) {
+      const errorJson = await response.json().catch(() => null);
+      const errorMsg = errorJson?.error?.message || (await response.text().catch(() => ''));
+      console.error(`[Gemini API Error] HTTP ${response.status}:`, errorMsg);
 
-        if (lastError.includes('API_KEY_INVALID') || lastError.includes('API key not valid')) {
-          return {
-            success: false,
-            error: `API_KEY_INVALID: Your GEMINI_API_KEY is incorrect or inactive. Please create a new key at https://aistudio.google.com and update Vercel.`,
-          };
-        }
-
-        continue;
-      }
-
-      const responseData = await response.json();
-      const candidateText = responseData?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-      if (!candidateText) {
+      if (response.status === 400 || response.status === 403 || errorMsg.includes('API_KEY_INVALID')) {
         return {
           success: false,
-          error: 'Received empty response from AI engine. Please capture a clearer picture.',
+          error: `Google API Error (${response.status}): ${errorMsg || 'Invalid API Key'}. Please check your GEMINI_API_KEY in Vercel Environment Variables.`,
         };
       }
-
-      // Clean JSON markdown wrapper if present
-      const cleanedText = candidateText.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
-      const parsed = JSON.parse(cleanedText);
-
-      if (parsed.success === false || parsed.error) {
-        return {
-          success: false,
-          error: parsed.error || 'The question or options are not clear enough to determine the answer.',
-        };
-      }
-
-      if (!parsed.answer || !parsed.question) {
-        return {
-          success: false,
-          error: 'Please capture a clear image containing one MCQ with question and options.',
-        };
-      }
-
-      const confidence: 'high' | 'medium' | 'low' = ['high', 'medium', 'low'].includes(parsed.confidence)
-        ? parsed.confidence
-        : 'medium';
 
       return {
-        success: true,
-        data: {
-          question: parsed.question || 'Question text unavailable',
-          options: parsed.options || {},
-          answer: String(parsed.answer).toUpperCase(),
-          answerText: parsed.answerText || (parsed.options ? parsed.options[parsed.answer] : '') || '',
-          explanation: parsed.explanation || 'No explanation provided.',
-          confidence,
-        },
+        success: false,
+        error: `[Google API ${response.status}] ${errorMsg || response.statusText}`,
       };
-    } catch (err: unknown) {
-      console.error(`[Gemini Exception - ${item.name}]`, err);
-      lastError = err instanceof Error ? err.message : 'Network error';
     }
-  }
 
-  return {
-    success: false,
-    error: `Google API Error: Your GEMINI_API_KEY is inactive, restricted, or generated under a project where Generative Language API is disabled. Please create a new free API key at https://aistudio.google.com and update Vercel. (${lastError})`,
-  };
+    const responseData = await response.json();
+    const candidateText = responseData?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (!candidateText) {
+      return {
+        success: false,
+        error: 'Received empty response from AI engine. Please capture a clearer picture.',
+      };
+    }
+
+    // Clean JSON markdown wrapper if present
+    const cleanedText = candidateText.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
+    const parsed = JSON.parse(cleanedText);
+
+    if (parsed.success === false || parsed.error) {
+      return {
+        success: false,
+        error: parsed.error || 'The question or options are not clear enough to determine the answer.',
+      };
+    }
+
+    if (!parsed.answer || !parsed.question) {
+      return {
+        success: false,
+        error: 'Please capture a clear image containing one MCQ with question and options.',
+      };
+    }
+
+    const confidence: 'high' | 'medium' | 'low' = ['high', 'medium', 'low'].includes(parsed.confidence)
+      ? parsed.confidence
+      : 'medium';
+
+    return {
+      success: true,
+      data: {
+        question: parsed.question || 'Question text unavailable',
+        options: parsed.options || {},
+        answer: String(parsed.answer).toUpperCase(),
+        answerText: parsed.answerText || (parsed.options ? parsed.options[parsed.answer] : '') || '',
+        explanation: parsed.explanation || 'No explanation provided.',
+        confidence,
+      },
+    };
+  } catch (err: unknown) {
+    console.error(`[Gemini Exception]`, err);
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Network error connecting to Gemini API.',
+    };
+  }
 }
