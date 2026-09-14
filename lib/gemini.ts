@@ -37,7 +37,7 @@ const JSON_SCHEMA = {
     answer: { type: "STRING", description: "The letter of the correct option, e.g., 'A', 'B', 'C', or 'D'" },
     answerText: { type: "STRING", description: "The exact text of the correct option" },
     explanation: { type: "STRING", description: "Short explanation for why this answer is correct" },
-    confidence: { type: "STRING", enum: ["high", "medium", "low"] }
+    confidence: { type: "STRING", description: "high, medium, or low" }
   },
   required: ["success"]
 };
@@ -59,119 +59,105 @@ export async function solveMCQWithGemini(
   // Clean API key (remove quotes, whitespace)
   const apiKey = rawApiKey.trim().replace(/^["']|["']$/g, '');
 
-  // Officially supported stable Gemini models in v1beta API
-  const modelsToTry = ['gemini-1.5-flash', 'gemini-1.5-pro'];
+  // Standard stable Gemini Vision model
+  const modelName = process.env.GEMINI_MODEL ? process.env.GEMINI_MODEL.trim() : 'gemini-1.5-flash';
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
-  // If user explicitly configured GEMINI_MODEL in env, try that first if it's valid
-  const customModel = process.env.GEMINI_MODEL?.trim();
-  if (customModel && !modelsToTry.includes(customModel) && !customModel.includes('2.0-flash-exp')) {
-    modelsToTry.unshift(customModel);
-  }
-
-  let lastGoogleErrorMessage = '';
-
-  for (const modelName of modelsToTry) {
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-
-    const requestBody = {
-      contents: [
-        {
-          parts: [
-            { text: SYSTEM_PROMPT },
-            {
-              inline_data: {
-                mime_type: mimeType,
-                data: base64Image,
-              },
+  const requestBody = {
+    contents: [
+      {
+        parts: [
+          { text: SYSTEM_PROMPT },
+          {
+            inline_data: {
+              mime_type: mimeType,
+              data: base64Image,
             },
-          ],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.1,
-        maxOutputTokens: 1000,
-        response_mime_type: "application/json",
-        response_schema: JSON_SCHEMA,
+          },
+        ],
       },
-    };
+    ],
+    generationConfig: {
+      temperature: 0.1,
+      maxOutputTokens: 1000,
+      response_mime_type: "application/json",
+      response_schema: JSON_SCHEMA,
+    },
+  };
 
-    try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-      });
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
 
-      if (!response.ok) {
-        const errorJson = await response.json().catch(() => null);
-        const errorMsg = errorJson?.error?.message || (await response.text().catch(() => ''));
-        lastGoogleErrorMessage = `[Google API ${response.status}] ${errorMsg || response.statusText}`;
+    if (!response.ok) {
+      const errorJson = await response.json().catch(() => null);
+      const errorMsg = errorJson?.error?.message || (await response.text().catch(() => ''));
+      console.error(`[Gemini API Error - ${modelName}] HTTP ${response.status}:`, errorMsg);
 
-        console.error(`[Gemini API Error - ${modelName}] HTTP ${response.status}:`, errorMsg);
-
-        // If key itself is invalid (API_KEY_INVALID), stop retrying
-        if (errorMsg.includes('API_KEY_INVALID') || errorMsg.includes('API key not valid')) {
-          return {
-            success: false,
-            error: `Google API Key Error: API_KEY_INVALID. Your GEMINI_API_KEY is incorrect or inactive. Please generate a new key from https://aistudio.google.com and update Vercel.`,
-          };
-        }
-
-        // Try next official model
-        continue;
-      }
-
-      const responseData = await response.json();
-      const candidateText = responseData?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-      if (!candidateText) {
+      if (errorMsg.includes('API_KEY_INVALID') || errorMsg.includes('API key not valid')) {
         return {
           success: false,
-          error: 'Received empty response from AI engine. Please capture a clearer picture.',
+          error: `Google API Key Error: API_KEY_INVALID. Your GEMINI_API_KEY is invalid. Please generate a new key from https://aistudio.google.com and update Vercel.`,
         };
       }
-
-      // Clean JSON markdown wrapper if present
-      const cleanedText = candidateText.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
-      const parsed = JSON.parse(cleanedText);
-
-      if (parsed.success === false || parsed.error) {
-        return {
-          success: false,
-          error: parsed.error || 'The question or options are not clear enough to determine the answer.',
-        };
-      }
-
-      if (!parsed.answer || !parsed.question) {
-        return {
-          success: false,
-          error: 'Please capture a clear image containing one MCQ with question and options.',
-        };
-      }
-
-      const confidence: 'high' | 'medium' | 'low' = ['high', 'medium', 'low'].includes(parsed.confidence)
-        ? parsed.confidence
-        : 'medium';
 
       return {
-        success: true,
-        data: {
-          question: parsed.question || 'Question text unavailable',
-          options: parsed.options || {},
-          answer: String(parsed.answer).toUpperCase(),
-          answerText: parsed.answerText || (parsed.options ? parsed.options[parsed.answer] : '') || '',
-          explanation: parsed.explanation || 'No explanation provided.',
-          confidence,
-        },
+        success: false,
+        error: `[Google API ${response.status}] ${errorMsg || response.statusText}`,
       };
-    } catch (err: unknown) {
-      console.error(`[Gemini Exception - ${modelName}]`, err);
-      lastGoogleErrorMessage = err instanceof Error ? err.message : 'Network error';
     }
-  }
 
-  return {
-    success: false,
-    error: lastGoogleErrorMessage || 'Unable to connect to Google Gemini API. Please verify your GEMINI_API_KEY in Vercel.',
-  };
+    const responseData = await response.json();
+    const candidateText = responseData?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (!candidateText) {
+      return {
+        success: false,
+        error: 'Received empty response from AI engine. Please capture a clearer picture.',
+      };
+    }
+
+    // Clean JSON markdown wrapper if present
+    const cleanedText = candidateText.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
+    const parsed = JSON.parse(cleanedText);
+
+    if (parsed.success === false || parsed.error) {
+      return {
+        success: false,
+        error: parsed.error || 'The question or options are not clear enough to determine the answer.',
+      };
+    }
+
+    if (!parsed.answer || !parsed.question) {
+      return {
+        success: false,
+        error: 'Please capture a clear image containing one MCQ with question and options.',
+      };
+    }
+
+    const confidence: 'high' | 'medium' | 'low' = ['high', 'medium', 'low'].includes(parsed.confidence)
+      ? parsed.confidence
+      : 'medium';
+
+    return {
+      success: true,
+      data: {
+        question: parsed.question || 'Question text unavailable',
+        options: parsed.options || {},
+        answer: String(parsed.answer).toUpperCase(),
+        answerText: parsed.answerText || (parsed.options ? parsed.options[parsed.answer] : '') || '',
+        explanation: parsed.explanation || 'No explanation provided.',
+        confidence,
+      },
+    };
+  } catch (err: unknown) {
+    console.error(`[Gemini Exception - ${modelName}]`, err);
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Network error connecting to Gemini API.',
+    };
+  }
 }
