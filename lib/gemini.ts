@@ -25,8 +25,14 @@ const JSON_SCHEMA = {
     question: { type: "STRING", description: "The full question text extracted from the image" },
     options: {
       type: "OBJECT",
-      description: "Key-value pairs of option labels to option text, e.g. {'A': 'Option text'}",
-      additionalProperties: { type: "STRING" }
+      description: "Key-value pairs of option letters to option text, e.g. A, B, C, D",
+      properties: {
+        A: { type: "STRING" },
+        B: { type: "STRING" },
+        C: { type: "STRING" },
+        D: { type: "STRING" },
+        E: { type: "STRING" }
+      }
     },
     answer: { type: "STRING", description: "The letter of the correct option, e.g., 'A', 'B', 'C', or 'D'" },
     answerText: { type: "STRING", description: "The exact text of the correct option" },
