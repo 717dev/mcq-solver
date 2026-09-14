@@ -42,6 +42,37 @@ const JSON_SCHEMA = {
   required: ["success"]
 };
 
+/**
+ * Dynamically queries Google ModelService to discover available models for the given API Key
+ */
+async function discoverAvailableModel(apiKey: string): Promise<string | null> {
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`);
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    const models: Array<{ name: string; supportedGenerationMethods?: string[] }> = data?.models || [];
+
+    // Filter models supporting generateContent
+    const validModels = models
+      .filter((m) => m.supportedGenerationMethods?.includes('generateContent'))
+      .map((m) => m.name.replace(/^models\//, ''));
+
+    if (validModels.length === 0) return null;
+
+    // Prefer flash models, then pro models, then any valid model
+    const flashModel = validModels.find((m) => m.includes('flash'));
+    if (flashModel) return flashModel;
+
+    const proModel = validModels.find((m) => m.includes('pro'));
+    if (proModel) return proModel;
+
+    return validModels[0];
+  } catch {
+    return null;
+  }
+}
+
 export async function solveMCQWithGemini(
   base64Image: string,
   mimeType: string
@@ -59,38 +90,57 @@ export async function solveMCQWithGemini(
   // Clean API key (remove quotes, whitespace)
   const apiKey = rawApiKey.trim().replace(/^["']|["']$/g, '');
 
-  // Standard stable Gemini Vision model
-  const modelName = process.env.GEMINI_MODEL ? process.env.GEMINI_MODEL.trim() : 'gemini-1.5-flash';
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  let selectedModel = process.env.GEMINI_MODEL?.trim() || 'gemini-1.5-flash';
 
-  const requestBody = {
-    contents: [
-      {
-        parts: [
-          { text: SYSTEM_PROMPT },
-          {
-            inline_data: {
-              mime_type: mimeType,
-              data: base64Image,
+  const generateWithModel = async (modelName: string) => {
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+    const requestBody = {
+      contents: [
+        {
+          parts: [
+            { text: SYSTEM_PROMPT },
+            {
+              inline_data: {
+                mime_type: mimeType,
+                data: base64Image,
+              },
             },
-          },
-        ],
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 1000,
+        response_mime_type: "application/json",
+        response_schema: JSON_SCHEMA,
       },
-    ],
-    generationConfig: {
-      temperature: 0.1,
-      maxOutputTokens: 1000,
-      response_mime_type: "application/json",
-      response_schema: JSON_SCHEMA,
-    },
-  };
+    };
 
-  try {
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
     });
+
+    return { response, modelName };
+  };
+
+  try {
+    let { response, modelName } = await generateWithModel(selectedModel);
+
+    // If 404 model not found, perform dynamic model discovery using Google ModelService
+    if (response.status === 404) {
+      console.warn(`[Gemini API] Model ${selectedModel} returned 404. Attempting dynamic model discovery...`);
+      const discoveredModel = await discoverAvailableModel(apiKey);
+
+      if (discoveredModel && discoveredModel !== selectedModel) {
+        console.log(`[Gemini API] Discovered available model for API key: ${discoveredModel}`);
+        const retryResult = await generateWithModel(discoveredModel);
+        response = retryResult.response;
+        modelName = retryResult.modelName;
+      }
+    }
 
     if (!response.ok) {
       const errorJson = await response.json().catch(() => null);
@@ -154,7 +204,7 @@ export async function solveMCQWithGemini(
       },
     };
   } catch (err: unknown) {
-    console.error(`[Gemini Exception - ${modelName}]`, err);
+    console.error(`[Gemini Exception]`, err);
     return {
       success: false,
       error: err instanceof Error ? err.message : 'Network error connecting to Gemini API.',
