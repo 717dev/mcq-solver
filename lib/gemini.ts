@@ -41,17 +41,19 @@ export async function solveMCQWithGemini(
   mimeType: string
 ): Promise<{ success: true; data: MCQAnswer } | { success: false; error: string }> {
   const apiKey = process.env.GEMINI_API_KEY;
-  const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  // Standard stable Gemini Vision model name
+  const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
 
   if (!apiKey || apiKey.trim() === '') {
     console.error('[Gemini Integration Error] GEMINI_API_KEY is not configured.');
     return {
       success: false,
-      error: 'Gemini API Key is missing. Please add your GEMINI_API_KEY to .env.local (or Vercel Environment Variables).',
+      error: 'Gemini API Key is missing. Please add your GEMINI_API_KEY to .env.local or Vercel Environment Variables.',
     };
   }
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${apiKey}`;
+  const cleanApiKey = apiKey.trim().replace(/^["']|["']$/g, '');
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${cleanApiKey}`;
 
   const requestBody = {
     contents: [
@@ -90,16 +92,16 @@ export async function solveMCQWithGemini(
       const errorText = await response.text();
       console.error(`[Gemini API Error] HTTP ${response.status}: ${errorText}`);
 
-      if (response.status === 400 || response.status === 403) {
+      if (response.status === 400 || response.status === 403 || response.status === 401) {
         return {
           success: false,
-          error: 'Invalid Gemini API key or unauthorized request. Please check your API key.',
+          error: 'Invalid Gemini API key or model name. Please check your GEMINI_API_KEY in Vercel Environment Variables.',
         };
       }
 
       return {
         success: false,
-        error: 'Gemini AI service error. Please try again in a few moments.',
+        error: 'Gemini AI service is temporarily unavailable. Please try again in a few moments.',
       };
     }
 
