@@ -56,7 +56,7 @@ Deploying this app to Vercel is **100% Free** and takes less than 5 minutes.
    | Key | Value | Notes |
    | :--- | :--- | :--- |
    | `GEMINI_API_KEY` | `your_actual_gemini_api_key` | Secret key from Google AI Studio |
-   | `GEMINI_MODEL` | `gemini-2.5-flash` | Fast vision model |
+   | `GEMINI_MODEL` | `gemini-2.0-flash` | Fast vision model |
    | `COOLDOWN_SECONDS` | `30` | 30s rate limit |
 
 5. Click **Deploy**.
@@ -76,7 +76,7 @@ npm install
 Create `.env.local`:
 ```env
 GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-2.0-flash
 COOLDOWN_SECONDS=30
 ```
 

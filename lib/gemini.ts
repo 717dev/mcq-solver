@@ -47,82 +47,121 @@ export async function solveMCQWithGemini(
 
   // Clean API key (remove quotes, whitespace)
   const apiKey = rawApiKey.trim().replace(/^["']|["']$/g, '');
-  const modelName = process.env.GEMINI_MODEL?.trim() || 'gemini-1.5-flash';
 
-  try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: modelName,
-      generationConfig: {
-        temperature: 0.1,
-        responseMimeType: 'application/json',
-      },
-    });
+  const envModel = process.env.GEMINI_MODEL?.trim();
+  const defaultModels = [
+    'gemini-2.0-flash',
+    'gemini-1.5-flash',
+    'gemini-1.5-flash-latest',
+    'gemini-1.5-pro',
+  ];
 
-    const result = await model.generateContent([
-      SYSTEM_PROMPT,
-      {
-        inlineData: {
-          data: base64Image,
-          mimeType: mimeType,
+  // Exclude invalid model names like 'gemini-2.5-flash'
+  const validEnvModel = (envModel && envModel !== 'gemini-2.5-flash') ? envModel : undefined;
+
+  // Candidate models to try in order
+  const candidateModels = Array.from(
+    new Set([
+      ...(validEnvModel ? [validEnvModel] : []),
+      ...defaultModels,
+    ])
+  );
+
+  let lastError: any = null;
+
+  for (const modelName of candidateModels) {
+    try {
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        generationConfig: {
+          temperature: 0.1,
+          responseMimeType: 'application/json',
         },
-      },
-    ]);
+      });
 
-    const responseText = result.response.text();
-    if (!responseText) {
+      const result = await model.generateContent([
+        SYSTEM_PROMPT,
+        {
+          inlineData: {
+            data: base64Image,
+            mimeType: mimeType,
+          },
+        },
+      ]);
+
+      const responseText = result.response.text();
+      if (!responseText) {
+        return {
+          success: false,
+          error: 'Received empty response from AI engine. Please capture a clearer picture.',
+        };
+      }
+
+      const cleanedText = responseText.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
+      const parsed = JSON.parse(cleanedText);
+
+      if (parsed.success === false || parsed.error) {
+        return {
+          success: false,
+          error: parsed.error || 'The question or options are not clear enough to determine the answer.',
+        };
+      }
+
+      if (!parsed.answer || !parsed.question) {
+        return {
+          success: false,
+          error: 'Please capture a clear image containing one MCQ with question and options.',
+        };
+      }
+
+      const confidence: 'high' | 'medium' | 'low' = ['high', 'medium', 'low'].includes(parsed.confidence)
+        ? parsed.confidence
+        : 'medium';
+
       return {
-        success: false,
-        error: 'Received empty response from AI engine. Please capture a clearer picture.',
+        success: true,
+        data: {
+          question: parsed.question || 'Question text unavailable',
+          options: parsed.options || {},
+          answer: String(parsed.answer).toUpperCase(),
+          answerText: parsed.answerText || (parsed.options ? parsed.options[parsed.answer] : '') || '',
+          explanation: parsed.explanation || 'No explanation provided.',
+          confidence,
+        },
       };
+    } catch (err: any) {
+      lastError = err;
+      const errorMsg = err?.message || String(err);
+
+      if (errorMsg.includes('API_KEY_INVALID') || errorMsg.includes('API key not valid')) {
+        return {
+          success: false,
+          error: 'Google API Key Error: API_KEY_INVALID. Please create a new free key at https://aistudio.google.com and update Vercel Environment Variables.',
+        };
+      }
+
+      if (errorMsg.includes('404') || errorMsg.includes('not found') || errorMsg.includes('ModelService.ListModels')) {
+        console.warn(`[Gemini SDK Warning] Model '${modelName}' returned 404/Not Found. Retrying with fallback model...`);
+        continue;
+      }
+
+      break;
     }
+  }
 
-    const cleanedText = responseText.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
-    const parsed = JSON.parse(cleanedText);
+  console.error('[Gemini SDK Exception]', lastError);
+  const finalErrorMsg = lastError?.message || String(lastError);
 
-    if (parsed.success === false || parsed.error) {
-      return {
-        success: false,
-        error: parsed.error || 'The question or options are not clear enough to determine the answer.',
-      };
-    }
-
-    if (!parsed.answer || !parsed.question) {
-      return {
-        success: false,
-        error: 'Please capture a clear image containing one MCQ with question and options.',
-      };
-    }
-
-    const confidence: 'high' | 'medium' | 'low' = ['high', 'medium', 'low'].includes(parsed.confidence)
-      ? parsed.confidence
-      : 'medium';
-
-    return {
-      success: true,
-      data: {
-        question: parsed.question || 'Question text unavailable',
-        options: parsed.options || {},
-        answer: String(parsed.answer).toUpperCase(),
-        answerText: parsed.answerText || (parsed.options ? parsed.options[parsed.answer] : '') || '',
-        explanation: parsed.explanation || 'No explanation provided.',
-        confidence,
-      },
-    };
-  } catch (err: any) {
-    console.error('[Gemini SDK Exception]', err);
-    const errorMsg = err?.message || String(err);
-
-    if (errorMsg.includes('API_KEY_INVALID') || errorMsg.includes('API key not valid')) {
-      return {
-        success: false,
-        error: 'Google API Key Error: API_KEY_INVALID. Please create a new free key at https://aistudio.google.com and update Vercel.',
-      };
-    }
-
+  if (finalErrorMsg.includes('404') || finalErrorMsg.includes('not found') || finalErrorMsg.includes('ModelService.ListModels')) {
     return {
       success: false,
-      error: `Gemini SDK Error: ${errorMsg}`,
+      error: 'Gemini Model 404 Error: Model not found for your API key. Please ensure: 1) Your API key is created at https://aistudio.google.com 2) If using Google Cloud Console, enable "Generative Language API" for your key 3) Set GEMINI_MODEL=gemini-2.0-flash in your environment variables.',
     };
   }
+
+  return {
+    success: false,
+    error: `Gemini SDK Error: ${finalErrorMsg}`,
+  };
 }

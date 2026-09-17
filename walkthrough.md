@@ -63,7 +63,7 @@ Ran `npm run build`:
 1. Create `.env.local` in `d:\Web`:
    ```env
    GEMINI_API_KEY=your_gemini_api_key_here
-   GEMINI_MODEL=gemini-2.5-flash
+   GEMINI_MODEL=gemini-2.0-flash
    COOLDOWN_SECONDS=30
    DAILY_REQUEST_LIMIT=200
    ```
