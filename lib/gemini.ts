@@ -25,16 +25,12 @@ If the image is unreadable or not an MCQ:
 
 const DEFAULT_MODELS = [
   'gemini-1.5-flash',
-  'gemini-1.5-flash-latest',
   'gemini-2.0-flash',
   'gemini-1.5-pro',
-  'gemini-1.5-flash-001',
-  'gemini-1.5-flash-002',
-  'gemini-2.0-flash-exp',
 ];
 
-const REQUEST_TIMEOUT_MS = 25000;
-const MAX_RETRIES = 2;
+const REQUEST_TIMEOUT_MS = 8000;
+const MAX_RETRIES = 1;
 
 async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

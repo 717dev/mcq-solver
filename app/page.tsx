@@ -22,6 +22,9 @@ export default function HomePage() {
     setAppState('solving');
     setErrorMessage(null);
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 14000);
+
     try {
       const uploadStart = Date.now();
       const response = await fetch('/api/solve', {
@@ -30,7 +33,10 @@ export default function HomePage() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ image: imageDataUrl }),
+        signal: controller.signal,
       });
+
+      clearTimeout(timeoutId);
 
       const networkMs = Date.now() - uploadStart;
       const data: SolveApiResponse & { serverTimeMs?: number; geminiTimeMs?: number } = await response.json();
@@ -71,10 +77,14 @@ export default function HomePage() {
         `├─ Frontend Render: ${frontendRenderMs}ms\n` +
         `└─ TOTAL LATENCY: ${totalMs}ms`
       );
-    } catch (err: unknown) {
+    } catch (err: any) {
+      clearTimeout(timeoutId);
       console.error('Solve request error:', err);
+      const isTimeout = err?.name === 'AbortError';
       setErrorMessage(
-        'Internet connection unavailable or server error. Please check your connection and try again.'
+        isTimeout
+          ? 'Request timed out while waiting for AI response. Please try capturing the photo again.'
+          : 'Internet connection unavailable or server error. Please check your connection and try again.'
       );
       setAppState('error');
     }

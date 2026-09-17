@@ -4,6 +4,9 @@ import { validateImagePayload } from '@/lib/validation';
 import { solveMCQWithGemini } from '@/lib/gemini';
 import { SolveApiResponse } from '@/lib/types';
 
+export const maxDuration = 15;
+export const dynamic = 'force-dynamic';
+
 export async function POST(req: NextRequest): Promise<NextResponse<SolveApiResponse>> {
   const routeStart = Date.now();
   try {
