@@ -98,7 +98,7 @@ export default function HomePage() {
           Auto Camera MCQ Solver
         </h1>
         <p className="text-xs text-slate-400">
-          Position your MCQ inside frame • Auto-captures & solves in 25 seconds
+          Position your MCQ inside frame • Auto-captures in 15 seconds
         </p>
       </header>
 
@@ -121,7 +121,7 @@ export default function HomePage() {
               setErrorMessage(msg);
               setAppState('error');
             }}
-            autoCaptureSeconds={25}
+            autoCaptureSeconds={15}
           />
         )}
 
@@ -136,7 +136,7 @@ export default function HomePage() {
         {appState === 'solving' && <LoadingState message="Analyzing & solving question..." />}
 
         {appState === 'result' && solution && (
-          <AnswerCard result={solution} onSolveAnother={handleRetake} />
+          <AnswerCard result={solution} onSolveAnother={handleRetake} autoReturnSeconds={10} />
         )}
 
         {appState === 'error' && (
@@ -165,7 +165,9 @@ export default function HomePage() {
       {/* Footer Info */}
       <footer className="w-full text-center py-3 border-t border-slate-800/80 text-[11px] text-slate-400 space-y-1">
         <div className="flex items-center justify-center space-x-2">
-          <span>Auto-capture 25s</span>
+          <span>Auto-capture 15s</span>
+          <span>•</span>
+          <span>Auto-next 10s</span>
           <span>•</span>
           <span>Unlimited practice</span>
         </div>

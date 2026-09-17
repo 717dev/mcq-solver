@@ -7,6 +7,7 @@ import { CheckCircle2, AlertTriangle, ArrowRight, HelpCircle } from 'lucide-reac
 interface AnswerCardProps {
   result: MCQAnswer;
   onSolveAnother: () => void;
+  autoReturnSeconds?: number;
 }
 
 const confidenceBadgeStyle: Record<ConfidenceLevel, { bg: string; text: string; label: string; icon: React.FC<{ className?: string }> }> = {
@@ -30,14 +31,61 @@ const confidenceBadgeStyle: Record<ConfidenceLevel, { bg: string; text: string; 
   },
 };
 
-export const AnswerCard: React.FC<AnswerCardProps> = ({ result, onSolveAnother }) => {
+export const AnswerCard: React.FC<AnswerCardProps> = ({
+  result,
+  onSolveAnother,
+  autoReturnSeconds = 10,
+}) => {
   const confidence = result.confidence || 'medium';
   const style = confidenceBadgeStyle[confidence];
   const IconComponent = style.icon;
 
+  const [timeLeft, setTimeLeft] = React.useState<number>(autoReturnSeconds);
+  const [isPaused, setIsPaused] = React.useState<boolean>(false);
+
+  // 10-Second Auto-Return Countdown Effect
+  React.useEffect(() => {
+    if (isPaused) return;
+
+    if (timeLeft <= 0) {
+      onSolveAnother();
+      return;
+    }
+
+    const timer = setInterval(() => {
+      setTimeLeft((prev) => prev - 1);
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [timeLeft, isPaused, onSolveAnother]);
+
   return (
     <div className="w-full max-w-md mx-auto space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
-      {/* Top Banner & Confidence Badge */}
+      {/* Auto-Next Question Countdown Banner */}
+      <div className="bg-slate-900/90 border border-blue-500/40 p-3.5 rounded-2xl flex items-center justify-between shadow-lg backdrop-blur-md">
+        <div className="flex items-center space-x-3 text-slate-200">
+          <span className="relative flex h-3 w-3">
+            <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${isPaused ? 'bg-amber-400' : 'bg-blue-400'} opacity-75`}></span>
+            <span className={`relative inline-flex rounded-full h-3 w-3 ${isPaused ? 'bg-amber-500' : 'bg-blue-500'}`}></span>
+          </span>
+          <span className="text-xs font-semibold">
+            {isPaused ? (
+              <span className="text-amber-300">Auto-next paused</span>
+            ) : (
+              <>Next question in <span className="font-bold text-blue-300 text-sm">{timeLeft}s</span>...</>
+            )}
+          </span>
+        </div>
+        <button
+          onClick={() => setIsPaused((prev) => !prev)}
+          type="button"
+          className="text-[11px] font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 px-3 py-1 rounded-lg border border-slate-700 transition-colors active:scale-95"
+        >
+          {isPaused ? 'Resume' : 'Pause'}
+        </button>
+      </div>
+
+      {/* Main Result Card */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-5">
         <div className="flex items-center justify-between border-b border-slate-800 pb-3">
           <span className="text-xs font-bold tracking-wider text-slate-400 uppercase">
@@ -126,14 +174,14 @@ export const AnswerCard: React.FC<AnswerCardProps> = ({ result, onSolveAnother }
         )}
       </div>
 
-      {/* Solve Another Action Button */}
+      {/* Next Question Action Button */}
       <button
         onClick={onSolveAnother}
         type="button"
-        aria-label="Solve Another Question"
+        aria-label="Next Question"
         className="w-full py-4 px-6 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 active:scale-[0.99] text-white font-semibold rounded-xl shadow-lg shadow-blue-500/25 flex items-center justify-center space-x-2 text-base transition-all"
       >
-        <span>Solve Another</span>
+        <span>Next Question ({timeLeft}s)</span>
         <ArrowRight className="w-5 h-5" />
       </button>
     </div>

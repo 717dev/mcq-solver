@@ -13,7 +13,7 @@ interface CameraViewProps {
 export const CameraView: React.FC<CameraViewProps> = ({
   onCapture,
   onError,
-  autoCaptureSeconds = 25,
+  autoCaptureSeconds = 15,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -240,7 +240,7 @@ export const CameraView: React.FC<CameraViewProps> = ({
               {isTimerPaused ? (
                 <>
                   <Play className="w-4 h-4 text-emerald-400" />
-                  <span>Resume (25s)</span>
+                  <span>Resume (15s)</span>
                 </>
               ) : (
                 <>
