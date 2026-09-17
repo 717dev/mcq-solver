@@ -186,7 +186,7 @@ export async function solveMCQWithGemini(
   if (finalErrorMsg.includes('404') || finalErrorMsg.includes('not found') || finalErrorMsg.includes('ModelService.ListModels')) {
     return {
       success: false,
-      error: 'Gemini model is unavailable for this API configuration. Please verify the configured model and API access.',
+      error: 'Gemini model unavailable (404). Please ensure your API key is created at https://aistudio.google.com or "Generative Language API" is enabled in Google Cloud Console.',
     };
   }
 
