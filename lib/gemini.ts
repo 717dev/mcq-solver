@@ -2,18 +2,10 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { MCQAnswer } from './types';
 
 const SYSTEM_PROMPT = `
-You are an expert, highly precise academic AI assistant specializing in solving Multiple Choice Questions (MCQs) from images.
+You are a ultra-fast academic MCQ solver. Read the image and determine the correct answer.
 
-Your task:
-1. Extract the primary question text visible in the image.
-2. Extract all visible answer options (e.g., A, B, C, D, etc.). Do NOT invent missing options.
-3. Analyze the question and determine the correct answer with highest accuracy.
-4. Provide a concise, clear explanation (2-3 sentences max).
-5. Rate your confidence level strictly as "high", "medium", or "low".
-
-Output MUST be a single valid JSON object strictly matching this format:
+Output MUST be a single valid JSON object in this exact format:
 {
-  "success": true,
   "question": "string",
   "options": {
     "A": "string",
@@ -23,12 +15,12 @@ Output MUST be a single valid JSON object strictly matching this format:
   },
   "answer": "A",
   "answerText": "string",
-  "explanation": "string",
+  "explanation": "One concise sentence explanation.",
   "confidence": "high"
 }
 
-If the image is blurry, illegible, or not an MCQ, respond with:
-{"success": false, "error": "The question or options are not clear enough to determine the answer."}
+If the image is unreadable or not an MCQ:
+{"error": "Could not read the image. Please capture the MCQ again."}
 `.trim();
 
 const DEFAULT_MODELS = [
@@ -83,14 +75,14 @@ async function fetchAvailableModels(apiKey: string): Promise<{ models: string[];
 export async function solveMCQWithGemini(
   base64Image: string,
   mimeType: string
-): Promise<{ success: true; data: MCQAnswer } | { success: false; error: string }> {
+): Promise<{ success: true; data: MCQAnswer; geminiTimeMs: number } | { success: false; error: string }> {
   const rawApiKey = process.env.GEMINI_API_KEY;
 
   if (!rawApiKey || rawApiKey.trim() === '') {
     console.error('[Gemini Integration Error] GEMINI_API_KEY environment variable is empty or missing.');
     return {
       success: false,
-      error: 'GEMINI_API_KEY is not configured on the server. Please check your environment variables.',
+      error: 'Gemini API authentication failed. GEMINI_API_KEY is not configured on server.',
     };
   }
 
@@ -113,11 +105,13 @@ export async function solveMCQWithGemini(
 
     while (attempt <= MAX_RETRIES) {
       try {
+        const geminiStart = Date.now();
         const genAI = new GoogleGenerativeAI(apiKey);
         const model = genAI.getGenerativeModel({
           model: modelName,
           generationConfig: {
             temperature: 0.1,
+            maxOutputTokens: 300,
             responseMimeType: 'application/json',
           },
         });
@@ -137,12 +131,15 @@ export async function solveMCQWithGemini(
         );
 
         const result = await Promise.race([generatePromise, timeoutPromise]);
+        const geminiTimeMs = Date.now() - geminiStart;
+        console.log(`[PERF BACKEND] Gemini generateContent execution time: ${geminiTimeMs}ms (model: ${modelName})`);
+
         const responseText = result.response.text();
 
         if (!responseText) {
           return {
             success: false,
-            error: 'Received empty response from AI engine. Please capture a clearer picture.',
+            error: 'Could not read the image. Please capture the MCQ again.',
           };
         }
 
@@ -152,14 +149,14 @@ export async function solveMCQWithGemini(
         if (parsed.success === false || parsed.error) {
           return {
             success: false,
-            error: parsed.error || 'The question or options are not clear enough to determine the answer.',
+            error: parsed.error || 'Could not read the image. Please capture the MCQ again.',
           };
         }
 
         if (!parsed.answer || !parsed.question) {
           return {
             success: false,
-            error: 'Please capture a clear image containing one MCQ with question and options.',
+            error: 'Could not read the image. Please capture the MCQ again.',
           };
         }
 
@@ -169,6 +166,7 @@ export async function solveMCQWithGemini(
 
         return {
           success: true,
+          geminiTimeMs,
           data: {
             question: parsed.question || 'Question text unavailable',
             options: parsed.options || {},
@@ -186,7 +184,7 @@ export async function solveMCQWithGemini(
         if (errorMsg.includes('API_KEY_INVALID') || errorMsg.includes('API key not valid')) {
           return {
             success: false,
-            error: 'Invalid API Key. Please verify your GEMINI_API_KEY environment variable.',
+            error: 'Gemini API authentication failed.',
           };
         }
 
@@ -202,12 +200,11 @@ export async function solveMCQWithGemini(
             if (apiError && (apiError.includes('API key') || apiError.includes('disabled'))) {
               return {
                 success: false,
-                error: `Google API Error: ${apiError}. Please create a key at https://aistudio.google.com or enable Generative Language API in GCP.`,
+                error: `Gemini API authentication failed: ${apiError}`,
               };
             }
 
             if (discoveredModels.length > 0) {
-              // Append discovered models to candidates list
               const newModels = discoveredModels.filter((m) => !candidateModels.includes(m));
               if (newModels.length > 0) {
                 console.log(`[Gemini SDK] Adding ${newModels.length} newly discovered models to candidates:`, newModels);
@@ -247,19 +244,19 @@ export async function solveMCQWithGemini(
   if (finalErrorMsg.includes('404') || finalErrorMsg.includes('not found') || finalErrorMsg.includes('ModelService.ListModels')) {
     return {
       success: false,
-      error: 'Gemini model unavailable (404). Please ensure your API key is created at https://aistudio.google.com or "Generative Language API" is enabled in Google Cloud Console.',
+      error: 'Configured Gemini model is unavailable. Please verify GEMINI_MODEL and Gemini API access.',
     };
   }
 
   if (finalErrorMsg.includes('429') || finalErrorMsg.includes('RESOURCE_EXHAUSTED')) {
     return {
       success: false,
-      error: 'Service is temporarily busy. Please wait a moment and try again.',
+      error: 'Too many requests. Retrying shortly...',
     };
   }
 
   return {
     success: false,
-    error: 'Unable to process image with Gemini AI engine. Please verify network connection and try again.',
+    error: 'Could not read the image. Please capture the MCQ again.',
   };
 }

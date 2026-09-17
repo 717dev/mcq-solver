@@ -18,10 +18,12 @@ export default function HomePage() {
 
   // Send solve request to /api/solve
   const sendSolveRequest = async (imageDataUrl: string) => {
+    const totalStart = Date.now();
     setAppState('solving');
     setErrorMessage(null);
 
     try {
+      const uploadStart = Date.now();
       const response = await fetch('/api/solve', {
         method: 'POST',
         headers: {
@@ -30,7 +32,8 @@ export default function HomePage() {
         body: JSON.stringify({ image: imageDataUrl }),
       });
 
-      const data: SolveApiResponse = await response.json();
+      const networkMs = Date.now() - uploadStart;
+      const data: SolveApiResponse & { serverTimeMs?: number; geminiTimeMs?: number } = await response.json();
 
       if (!response.ok || !data.success) {
         const errorText =
@@ -47,6 +50,7 @@ export default function HomePage() {
         return;
       }
 
+      const renderStart = Date.now();
       setSolution({
         question: data.question,
         options: data.options,
@@ -57,6 +61,16 @@ export default function HomePage() {
       });
 
       setAppState('result');
+      const totalMs = Date.now() - totalStart;
+      const frontendRenderMs = Date.now() - renderStart;
+
+      console.log(
+        `[PERF BENCHMARK]\n` +
+        `├─ Network Upload & Server: ${networkMs}ms\n` +
+        `├─ Gemini Engine Generation: ${data.geminiTimeMs || 'N/A'}ms\n` +
+        `├─ Frontend Render: ${frontendRenderMs}ms\n` +
+        `└─ TOTAL LATENCY: ${totalMs}ms`
+      );
     } catch (err: unknown) {
       console.error('Solve request error:', err);
       setErrorMessage(

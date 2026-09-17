@@ -80,6 +80,7 @@ export const CameraView: React.FC<CameraViewProps> = ({
   // Capture photo logic
   const performCapture = useCallback(async (autoSolve = true) => {
     if (!videoRef.current) return;
+    const captureStart = Date.now();
 
     try {
       const video = videoRef.current;
@@ -94,9 +95,14 @@ export const CameraView: React.FC<CameraViewProps> = ({
 
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const rawDataUrl = canvas.toDataURL('image/jpeg', 0.9);
+      const captureMs = Date.now() - captureStart;
 
       // Compress image client-side
-      const compressed = await compressImage(rawDataUrl);
+      const compressStart = Date.now();
+      const compressed = await compressImage(rawDataUrl, 1280, 1280, 0.80);
+      const compressMs = Date.now() - compressStart;
+
+      console.log(`[PERF CLIENT] Camera capture: ${captureMs}ms, Compression: ${compressMs}ms (Size: ~${Math.round(compressed.length * 0.75 / 1024)}KB)`);
       onCapture(compressed, autoSolve);
     } catch (err: unknown) {
       console.error('Capture error:', err);

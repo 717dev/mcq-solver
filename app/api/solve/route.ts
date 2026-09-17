@@ -5,6 +5,7 @@ import { solveMCQWithGemini } from '@/lib/gemini';
 import { SolveApiResponse } from '@/lib/types';
 
 export async function POST(req: NextRequest): Promise<NextResponse<SolveApiResponse>> {
+  const routeStart = Date.now();
   try {
     // 1. Identify Client IP for Server-side Rate Limiting
     const forwardedFor = req.headers.get('x-forwarded-for');
@@ -59,10 +60,15 @@ export async function POST(req: NextRequest): Promise<NextResponse<SolveApiRespo
     // 5. Register request in cooldown tracker upon success
     registerSuccessfulRequest(clientIp);
 
+    const totalBackendMs = Date.now() - routeStart;
+    console.log(`[PERF BACKEND] Total backend API route execution time: ${totalBackendMs}ms (Gemini: ${result.geminiTimeMs}ms)`);
+
     // 6. Return Structured Answer
     return NextResponse.json({
       success: true,
       ...result.data,
+      serverTimeMs: totalBackendMs,
+      geminiTimeMs: result.geminiTimeMs,
     });
   } catch (err: unknown) {
     console.error('[API Route Exception /api/solve]', err);
