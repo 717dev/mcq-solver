@@ -36,6 +36,9 @@ const DEFAULT_MODELS = [
   'gemini-1.5-flash-latest',
   'gemini-2.0-flash',
   'gemini-1.5-pro',
+  'gemini-1.5-flash-001',
+  'gemini-1.5-flash-002',
+  'gemini-2.0-flash-exp',
 ];
 
 const REQUEST_TIMEOUT_MS = 25000;
@@ -43,6 +46,38 @@ const MAX_RETRIES = 2;
 
 async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Dynamically queries Google Generative Language API to list models
+ * supported for generateContent with the user's specific API key.
+ */
+async function fetchAvailableModels(apiKey: string): Promise<{ models: string[]; apiError?: string }> {
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+    const data = await res.json();
+
+    if (!res.ok) {
+      const googleErrMsg = data?.error?.message || `HTTP ${res.status}`;
+      console.warn(`[Gemini ListModels Warning] Google API returned ${res.status}: ${googleErrMsg}`);
+      return { models: [], apiError: googleErrMsg };
+    }
+
+    if (Array.isArray(data?.models)) {
+      const validModels = data.models
+        .filter((m: any) =>
+          Array.isArray(m.supportedGenerationMethods) &&
+          m.supportedGenerationMethods.includes('generateContent')
+        )
+        .map((m: any) => m.name.replace(/^models\//, ''));
+
+      console.log(`[Gemini ListModels] Discovered ${validModels.length} models for API key:`, validModels);
+      return { models: validModels };
+    }
+  } catch (err) {
+    console.warn('[Gemini ListModels Exception]', err);
+  }
+  return { models: [] };
 }
 
 export async function solveMCQWithGemini(
@@ -62,7 +97,7 @@ export async function solveMCQWithGemini(
   const apiKey = rawApiKey.trim().replace(/^["']|["']$/g, '');
 
   const envModel = process.env.GEMINI_MODEL?.trim();
-  const candidateModels = Array.from(
+  let candidateModels = Array.from(
     new Set([
       ...(envModel ? [envModel] : []),
       ...DEFAULT_MODELS,
@@ -70,9 +105,12 @@ export async function solveMCQWithGemini(
   );
 
   let lastError: any = null;
+  let hasTriedDynamicDiscovery = false;
 
-  for (const modelName of candidateModels) {
+  for (let i = 0; i < candidateModels.length; i++) {
+    const modelName = candidateModels[i];
     let attempt = 0;
+
     while (attempt <= MAX_RETRIES) {
       try {
         const genAI = new GoogleGenerativeAI(apiKey);
@@ -144,18 +182,41 @@ export async function solveMCQWithGemini(
         lastError = err;
         const errorMsg = err?.message || String(err);
 
-        // Model not found (404) -> Move to next model in candidateModels immediately
-        if (errorMsg.includes('404') || errorMsg.includes('not found') || errorMsg.includes('ModelService.ListModels')) {
-          console.warn(`[Gemini SDK Warning] Model '${modelName}' returned 404/Not Found. Retrying with fallback model...`);
-          break;
-        }
-
         // Invalid API Key
         if (errorMsg.includes('API_KEY_INVALID') || errorMsg.includes('API key not valid')) {
           return {
             success: false,
             error: 'Invalid API Key. Please verify your GEMINI_API_KEY environment variable.',
           };
+        }
+
+        // 404 / Model Not Found -> Try dynamic model discovery if not yet done
+        if (errorMsg.includes('404') || errorMsg.includes('not found') || errorMsg.includes('ModelService.ListModels')) {
+          console.warn(`[Gemini SDK Warning] Model '${modelName}' returned 404/Not Found.`);
+
+          if (!hasTriedDynamicDiscovery) {
+            hasTriedDynamicDiscovery = true;
+            console.log('[Gemini SDK] Performing dynamic model discovery via ListModels API...');
+            const { models: discoveredModels, apiError } = await fetchAvailableModels(apiKey);
+
+            if (apiError && (apiError.includes('API key') || apiError.includes('disabled'))) {
+              return {
+                success: false,
+                error: `Google API Error: ${apiError}. Please create a key at https://aistudio.google.com or enable Generative Language API in GCP.`,
+              };
+            }
+
+            if (discoveredModels.length > 0) {
+              // Append discovered models to candidates list
+              const newModels = discoveredModels.filter((m) => !candidateModels.includes(m));
+              if (newModels.length > 0) {
+                console.log(`[Gemini SDK] Adding ${newModels.length} newly discovered models to candidates:`, newModels);
+                candidateModels.push(...newModels);
+              }
+            }
+          }
+
+          break; // Break inner retry loop for this model, move to next model in candidateModels
         }
 
         // Transient or Rate-Limit Errors -> Retry with exponential backoff
