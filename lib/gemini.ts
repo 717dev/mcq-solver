@@ -24,12 +24,13 @@ If the image is unreadable or not an MCQ:
 `.trim();
 
 const DEFAULT_MODELS = [
-  'gemini-1.5-flash',
   'gemini-2.0-flash',
+  'gemini-1.5-flash',
+  'gemini-2.5-flash',
   'gemini-1.5-pro',
 ];
 
-const REQUEST_TIMEOUT_MS = 8000;
+const REQUEST_TIMEOUT_MS = 25000;
 const MAX_RETRIES = 1;
 
 async function sleep(ms: number): Promise<void> {
@@ -212,18 +213,22 @@ export async function solveMCQWithGemini(
           break; // Break inner retry loop for this model, move to next model in candidateModels
         }
 
-        // Transient or Rate-Limit Errors -> Retry with exponential backoff
+        // 503 / UNAVAILABLE / Capacity limit -> Immediately fallback to next model candidate
+        if (errorMsg.includes('503') || errorMsg.includes('UNAVAILABLE') || errorMsg.includes('No capacity available')) {
+          console.warn(`[Gemini SDK Warning] Model '${modelName}' returned 503/No capacity available. Switching to fallback model...`);
+          break; // Do not waste time retrying an overloaded model; try next model immediately
+        }
+
+        // Transient or Rate-Limit Errors -> Retry with short backoff
         const isTransient =
           errorMsg.includes('429') ||
           errorMsg.includes('RESOURCE_EXHAUSTED') ||
-          errorMsg.includes('503') ||
           errorMsg.includes('500') ||
-          errorMsg.includes('UNAVAILABLE') ||
           errorMsg.includes('GEMINI_TIMEOUT');
 
         if (isTransient && attempt < MAX_RETRIES) {
           attempt++;
-          const delayMs = Math.pow(2, attempt) * 1000 + Math.floor(Math.random() * 500);
+          const delayMs = 1000;
           console.warn(`[Gemini SDK Retry] Transient error (${errorMsg}) on model '${modelName}'. Retrying attempt ${attempt}/${MAX_RETRIES} in ${delayMs}ms...`);
           await sleep(delayMs);
           continue;
@@ -244,10 +249,17 @@ export async function solveMCQWithGemini(
     };
   }
 
+  if (finalErrorMsg.includes('503') || finalErrorMsg.includes('UNAVAILABLE') || finalErrorMsg.includes('No capacity available')) {
+    return {
+      success: false,
+      error: 'Gemini AI server is currently at full capacity (503). Please wait a few seconds and try again.',
+    };
+  }
+
   if (finalErrorMsg.includes('429') || finalErrorMsg.includes('RESOURCE_EXHAUSTED')) {
     return {
       success: false,
-      error: 'Too many requests. Retrying shortly...',
+      error: 'Too many requests to Gemini API. Retrying shortly...',
     };
   }
 

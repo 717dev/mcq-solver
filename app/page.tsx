@@ -23,7 +23,7 @@ export default function HomePage() {
     setErrorMessage(null);
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 14000);
+    const timeoutId = setTimeout(() => controller.abort(), 35000);
 
     try {
       const uploadStart = Date.now();

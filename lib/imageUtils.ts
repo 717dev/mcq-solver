@@ -11,9 +11,9 @@ export const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
  */
 export async function compressImage(
   dataUrl: string,
-  maxWidth = 1600,
-  maxHeight = 1600,
-  quality = 0.85
+  maxWidth = 1280,
+  maxHeight = 1280,
+  quality = 0.75
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const img = new Image();
