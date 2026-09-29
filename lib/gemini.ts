@@ -2,7 +2,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { MCQAnswer } from './types';
 
 const SYSTEM_PROMPT = `
-You are a ultra-fast academic MCQ solver. Read the image and determine the correct answer.
+You are an ultra-fast academic MCQ solver. Read the image and determine the correct answer.
 
 Output MUST be a single valid JSON object in this exact format:
 {
@@ -23,51 +23,14 @@ If the image is unreadable or not an MCQ:
 {"error": "Could not read the image. Please capture the MCQ again."}
 `.trim();
 
+// Fast production models in priority order
 const DEFAULT_MODELS = [
-  'gemini-2.0-flash',
   'gemini-1.5-flash',
-  'gemini-2.5-flash',
+  'gemini-2.0-flash',
   'gemini-1.5-pro',
 ];
 
-const REQUEST_TIMEOUT_MS = 25000;
-const MAX_RETRIES = 1;
-
-async function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Dynamically queries Google Generative Language API to list models
- * supported for generateContent with the user's specific API key.
- */
-async function fetchAvailableModels(apiKey: string): Promise<{ models: string[]; apiError?: string }> {
-  try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
-    const data = await res.json();
-
-    if (!res.ok) {
-      const googleErrMsg = data?.error?.message || `HTTP ${res.status}`;
-      console.warn(`[Gemini ListModels Warning] Google API returned ${res.status}: ${googleErrMsg}`);
-      return { models: [], apiError: googleErrMsg };
-    }
-
-    if (Array.isArray(data?.models)) {
-      const validModels = data.models
-        .filter((m: any) =>
-          Array.isArray(m.supportedGenerationMethods) &&
-          m.supportedGenerationMethods.includes('generateContent')
-        )
-        .map((m: any) => m.name.replace(/^models\//, ''));
-
-      console.log(`[Gemini ListModels] Discovered ${validModels.length} models for API key:`, validModels);
-      return { models: validModels };
-    }
-  } catch (err) {
-    console.warn('[Gemini ListModels Exception]', err);
-  }
-  return { models: [] };
-}
+const REQUEST_TIMEOUT_MS = 14000; // 14 seconds max per single attempt
 
 export async function solveMCQWithGemini(
   base64Image: string,
@@ -77,195 +40,143 @@ export async function solveMCQWithGemini(
   const rawApiKey = customApiKey || process.env.GEMINI_API_KEY;
 
   if (!rawApiKey || rawApiKey.trim() === '') {
-    console.error('[Gemini Integration Error] GEMINI_API_KEY environment variable is empty or missing.');
+    console.error('[Gemini API Error] GEMINI_API_KEY environment variable is empty or missing.');
     return {
       success: false,
-      error: 'Gemini API authentication failed. GEMINI_API_KEY is missing on server. Please configure your API Key using the Key icon in the top header.',
+      error: 'Gemini API key is not configured. Please click the Key button in the top header to enter your API key.',
     };
   }
 
   const apiKey = rawApiKey.trim().replace(/^["']|["']$/g, '');
-
   const envModel = process.env.GEMINI_MODEL?.trim();
-  let candidateModels = Array.from(
+
+  // Deduplicated candidate models list
+  const candidateModels = Array.from(
     new Set([
-      ...(envModel ? [envModel] : []),
+      ...(envModel && envModel !== 'gemini-3.6-flash-high' ? [envModel] : []),
       ...DEFAULT_MODELS,
     ])
   );
 
   let lastError: any = null;
-  let hasTriedDynamicDiscovery = false;
 
-  for (let i = 0; i < candidateModels.length; i++) {
-    const modelName = candidateModels[i];
-    let attempt = 0;
+  for (const modelName of candidateModels) {
+    try {
+      const geminiStart = Date.now();
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 300,
+          responseMimeType: 'application/json',
+        },
+      });
 
-    while (attempt <= MAX_RETRIES) {
-      try {
-        const geminiStart = Date.now();
-        const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({
-          model: modelName,
-          generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 300,
-            responseMimeType: 'application/json',
+      const generatePromise = model.generateContent([
+        SYSTEM_PROMPT,
+        {
+          inlineData: {
+            data: base64Image,
+            mimeType: mimeType,
           },
-        });
+        },
+      ]);
 
-        const generatePromise = model.generateContent([
-          SYSTEM_PROMPT,
-          {
-            inlineData: {
-              data: base64Image,
-              mimeType: mimeType,
-            },
-          },
-        ]);
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('GEMINI_TIMEOUT')), REQUEST_TIMEOUT_MS)
+      );
 
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('GEMINI_TIMEOUT')), REQUEST_TIMEOUT_MS)
-        );
+      const result = await Promise.race([generatePromise, timeoutPromise]);
+      const geminiTimeMs = Date.now() - geminiStart;
+      console.log(`[PERF BACKEND] Gemini generateContent execution time: ${geminiTimeMs}ms (model: ${modelName})`);
 
-        const result = await Promise.race([generatePromise, timeoutPromise]);
-        const geminiTimeMs = Date.now() - geminiStart;
-        console.log(`[PERF BACKEND] Gemini generateContent execution time: ${geminiTimeMs}ms (model: ${modelName})`);
+      const responseText = result.response.text();
 
-        const responseText = result.response.text();
-
-        if (!responseText) {
-          return {
-            success: false,
-            error: 'Could not read the image. Please capture the MCQ again.',
-          };
-        }
-
-        const cleanedText = responseText.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
-        const parsed = JSON.parse(cleanedText);
-
-        if (parsed.success === false || parsed.error) {
-          return {
-            success: false,
-            error: parsed.error || 'Could not read the image. Please capture the MCQ again.',
-          };
-        }
-
-        if (!parsed.answer || !parsed.question) {
-          return {
-            success: false,
-            error: 'Could not read the image. Please capture the MCQ again.',
-          };
-        }
-
-        const confidence: 'high' | 'medium' | 'low' = ['high', 'medium', 'low'].includes(parsed.confidence)
-          ? parsed.confidence
-          : 'medium';
-
+      if (!responseText) {
         return {
-          success: true,
-          geminiTimeMs,
-          data: {
-            question: parsed.question || 'Question text unavailable',
-            options: parsed.options || {},
-            answer: String(parsed.answer).toUpperCase(),
-            answerText: parsed.answerText || (parsed.options ? parsed.options[parsed.answer] : '') || '',
-            explanation: parsed.explanation || 'No explanation provided.',
-            confidence,
-          },
+          success: false,
+          error: 'Could not read the image. Please capture the MCQ again.',
         };
-      } catch (err: any) {
-        lastError = err;
-        const errorMsg = err?.message || String(err);
-
-        // Invalid API Key
-        if (errorMsg.includes('API_KEY_INVALID') || errorMsg.includes('API key not valid')) {
-          return {
-            success: false,
-            error: 'Gemini API authentication failed.',
-          };
-        }
-
-        // 404 / Model Not Found -> Try dynamic model discovery if not yet done
-        if (errorMsg.includes('404') || errorMsg.includes('not found') || errorMsg.includes('ModelService.ListModels')) {
-          console.warn(`[Gemini SDK Warning] Model '${modelName}' returned 404/Not Found.`);
-
-          if (!hasTriedDynamicDiscovery) {
-            hasTriedDynamicDiscovery = true;
-            console.log('[Gemini SDK] Performing dynamic model discovery via ListModels API...');
-            const { models: discoveredModels, apiError } = await fetchAvailableModels(apiKey);
-
-            if (apiError && (apiError.includes('API key') || apiError.includes('disabled'))) {
-              return {
-                success: false,
-                error: `Gemini API authentication failed: ${apiError}`,
-              };
-            }
-
-            if (discoveredModels.length > 0) {
-              const newModels = discoveredModels.filter((m) => !candidateModels.includes(m));
-              if (newModels.length > 0) {
-                console.log(`[Gemini SDK] Adding ${newModels.length} newly discovered models to candidates:`, newModels);
-                candidateModels.push(...newModels);
-              }
-            }
-          }
-
-          break; // Break inner retry loop for this model, move to next model in candidateModels
-        }
-
-        // 503 / UNAVAILABLE / Capacity limit -> Immediately fallback to next model candidate
-        if (errorMsg.includes('503') || errorMsg.includes('UNAVAILABLE') || errorMsg.includes('No capacity available')) {
-          console.warn(`[Gemini SDK Warning] Model '${modelName}' returned 503/No capacity available. Switching to fallback model...`);
-          break; // Do not waste time retrying an overloaded model; try next model immediately
-        }
-
-        // Transient or Rate-Limit Errors -> Retry with short backoff
-        const isTransient =
-          errorMsg.includes('429') ||
-          errorMsg.includes('RESOURCE_EXHAUSTED') ||
-          errorMsg.includes('500') ||
-          errorMsg.includes('GEMINI_TIMEOUT');
-
-        if (isTransient && attempt < MAX_RETRIES) {
-          attempt++;
-          const delayMs = 1000;
-          console.warn(`[Gemini SDK Retry] Transient error (${errorMsg}) on model '${modelName}'. Retrying attempt ${attempt}/${MAX_RETRIES} in ${delayMs}ms...`);
-          await sleep(delayMs);
-          continue;
-        }
-
-        break;
       }
+
+      const cleanedText = responseText.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
+      const parsed = JSON.parse(cleanedText);
+
+      if (parsed.success === false || parsed.error) {
+        return {
+          success: false,
+          error: parsed.error || 'Could not read the image. Please capture the MCQ again.',
+        };
+      }
+
+      if (!parsed.answer || !parsed.question) {
+        return {
+          success: false,
+          error: 'Could not read the image. Please capture the MCQ again.',
+        };
+      }
+
+      const confidence: 'high' | 'medium' | 'low' = ['high', 'medium', 'low'].includes(parsed.confidence)
+        ? parsed.confidence
+        : 'medium';
+
+      return {
+        success: true,
+        geminiTimeMs,
+        data: {
+          question: parsed.question || 'Question text unavailable',
+          options: parsed.options || {},
+          answer: String(parsed.answer).toUpperCase(),
+          answerText: parsed.answerText || (parsed.options ? parsed.options[parsed.answer] : '') || '',
+          explanation: parsed.explanation || 'No explanation provided.',
+          confidence,
+        },
+      };
+    } catch (err: any) {
+      lastError = err;
+      const errorMsg = err?.message || String(err);
+      console.warn(`[Gemini SDK Attempt Failed] Model '${modelName}' error: ${errorMsg}`);
+
+      // Invalid API key fails immediately without trying other models
+      if (errorMsg.includes('API_KEY_INVALID') || errorMsg.includes('API key not valid')) {
+        return {
+          success: false,
+          error: 'Invalid Gemini API Key. Please check your key in the header and try again.',
+        };
+      }
+
+      // 404, 503, Timeout, or Overloaded -> Continue immediately to next candidate model
+      continue;
     }
   }
 
-  console.error('[Gemini SDK Exception]', lastError);
+  console.error('[Gemini SDK All Models Exhausted]', lastError);
   const finalErrorMsg = lastError?.message || String(lastError);
-
-  if (finalErrorMsg.includes('404') || finalErrorMsg.includes('not found') || finalErrorMsg.includes('ModelService.ListModels')) {
-    return {
-      success: false,
-      error: 'Configured Gemini model is unavailable. Please verify GEMINI_MODEL and Gemini API access.',
-    };
-  }
 
   if (finalErrorMsg.includes('503') || finalErrorMsg.includes('UNAVAILABLE') || finalErrorMsg.includes('No capacity available')) {
     return {
       success: false,
-      error: 'Gemini AI server is currently at full capacity (503). Please wait a few seconds and try again.',
+      error: 'Gemini AI server is currently overloaded (503). Please try again in a few seconds.',
     };
   }
 
   if (finalErrorMsg.includes('429') || finalErrorMsg.includes('RESOURCE_EXHAUSTED')) {
     return {
       success: false,
-      error: 'Too many requests to Gemini API. Retrying shortly...',
+      error: 'API rate limit reached. Please wait a moment before trying again.',
+    };
+  }
+
+  if (finalErrorMsg.includes('GEMINI_TIMEOUT')) {
+    return {
+      success: false,
+      error: 'Request timed out waiting for AI response. Please try again with a clearer photo.',
     };
   }
 
   return {
     success: false,
-    error: 'Could not read the image. Please capture the MCQ again.',
+    error: 'Could not process the image right now. Please try again.',
   };
 }
