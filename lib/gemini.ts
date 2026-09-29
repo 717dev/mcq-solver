@@ -71,15 +71,16 @@ async function fetchAvailableModels(apiKey: string): Promise<{ models: string[];
 
 export async function solveMCQWithGemini(
   base64Image: string,
-  mimeType: string
+  mimeType: string,
+  customApiKey?: string
 ): Promise<{ success: true; data: MCQAnswer; geminiTimeMs: number } | { success: false; error: string }> {
-  const rawApiKey = process.env.GEMINI_API_KEY;
+  const rawApiKey = customApiKey || process.env.GEMINI_API_KEY;
 
   if (!rawApiKey || rawApiKey.trim() === '') {
     console.error('[Gemini Integration Error] GEMINI_API_KEY environment variable is empty or missing.');
     return {
       success: false,
-      error: 'Gemini API authentication failed. GEMINI_API_KEY is not configured on server.',
+      error: 'Gemini API authentication failed. GEMINI_API_KEY is missing on server. Please configure your API Key using the Key icon in the top header.',
     };
   }
 

@@ -8,12 +8,14 @@ interface CameraViewProps {
   onCapture: (compressedDataUrl: string, autoSolve?: boolean) => void;
   onError: (errorMessage: string) => void;
   autoCaptureSeconds?: number;
+  initialTimerPaused?: boolean;
 }
 
 export const CameraView: React.FC<CameraViewProps> = ({
   onCapture,
   onError,
   autoCaptureSeconds = 15,
+  initialTimerPaused = false,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -23,9 +25,9 @@ export const CameraView: React.FC<CameraViewProps> = ({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState<boolean>(true);
 
-  // Auto-capture timer state (25 seconds)
+  // Auto-capture timer state
   const [timeLeft, setTimeLeft] = useState<number>(autoCaptureSeconds);
-  const [isTimerPaused, setIsTimerPaused] = useState<boolean>(false);
+  const [isTimerPaused, setIsTimerPaused] = useState<boolean>(initialTimerPaused);
 
   // Initialize camera stream
   const startCamera = useCallback(async (mode: 'environment' | 'user') => {

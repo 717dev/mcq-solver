@@ -48,7 +48,8 @@ export async function POST(req: NextRequest): Promise<NextResponse<SolveApiRespo
 
     // 4. Send Image to Gemini Vision Engine
     const { base64Data, mimeType } = validation.data;
-    const result = await solveMCQWithGemini(base64Data, mimeType);
+    const clientApiKey = req.headers.get('x-gemini-api-key') || undefined;
+    const result = await solveMCQWithGemini(base64Data, mimeType, clientApiKey);
 
     if (!result.success) {
       return NextResponse.json(
